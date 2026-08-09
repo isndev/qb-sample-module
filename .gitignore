@@ -1,9 +1,6 @@
-CMakeCache.txt
-CMakeFiles
-CMakeScripts
-Testing
-Makefile
-cmake_install.cmake
-install_manifest.txt
-compile_commands.json
-CTestTestfile.cmake
+# This repository is a template payload, not a buildable tree: template/ only compiles after the
+# scaffolder has rendered it. Nothing should be built here.
+build/
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,15 @@
+# Build trees. The superbuild root puts a fetched qb under build/_deps, so removing this
+# directory also removes it -- the next configure re-fetches.
+build/
+build-*/
+cmake-build-*/
+
+CMakeCache.txt
+CMakeFiles/
+CTestTestfile.cmake
+
+.vscode/
+.idea/
+.cache/
+compile_commands.json
+.DS_Store

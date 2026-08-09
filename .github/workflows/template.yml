@@ -1,0 +1,254 @@
+# Scaffold this template with the REAL scaffolder, then build and test what it produced.
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# Nothing ever built this template. Between 2019 and 2026 no workflow, script or test in any
+# repository of this project configured it, and it rotted all the way to not configuring at all:
+# it registered a header-only module without HEADER_ONLY, kept its headers in a flat
+# actor/ event/ service/ tree rather than under src/qbm/<name>/, called a
+# qb_register_module_gtest() that no longer exists, and overrode onInit() with the pre-2.6 `bool`
+# signature. None of that was hard to see. Nothing was looking.
+#
+# So the property this lane protects is not "the template compiles". It is: a stranger runs the
+# published one-liner and gets a module that configures, builds and passes its tests. Anything
+# less reproduces the original defect in a new place.
+#
+# WHAT IT ACTUALLY RUNS
+# ---------------------
+# qb's own script/qb-new-module.sh, from the qb checkout below, pointed at THIS checkout with
+# QB_TEMPLATE_DIR. Not a reimplementation of it, and not the copy published on the default
+# branch: the scaffolder and the template are two halves of one product, and a change to either
+# can break the pair. Running the real script against the proposed content is the only
+# arrangement in which a pull request to either side is tested.
+#
+# WHICH qb
+# --------
+# The branch of the same name. qb, the qbm modules, the superproject and this template all carry
+# `main` (released) and `develop` (next version) and move together. The ref is PROVEN to exist
+# before checkout rather than silently falling back — a lane that quietly tested a different
+# pairing while reporting green would be worse than no lane.
+#
+# ANTI-VACUITY
+# ------------
+# Every count below can be satisfied by a build that did nothing, so each is asserted against a
+# floor and against its own preconditions: the render must substitute placeholders in files AND
+# in path names and leave none behind, the module must register under the USER's name rather than
+# the template's, the build must compile a non-zero number of translation units, and the suite
+# must EXECUTE rather than skip — ctest counts a skip as a pass.
+name: template
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+  workflow_dispatch:
+    inputs:
+      qb_ref:
+        description: 'isndev/qb ref to build against (empty = the branch of the same name)'
+        required: false
+        default: ''
+  # The template can rot without anyone pushing to it, because qb moves underneath. Weekly is
+  # what turns "nobody noticed for seven years" into "nobody noticed for a week".
+  schedule:
+    - cron: '37 4 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: template-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scaffold-and-build:
+    name: scaffold + build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest ]
+
+    steps:
+      - name: Check out this template
+        uses: actions/checkout@v6
+        with:
+          path: template
+
+      # github.base_ref for a PR (the branch being merged INTO), github.ref_name otherwise.
+      # Never github.head_ref: on a fork PR that string is attacker-controlled, and it is also
+      # the wrong question — what must be tested is the pairing this change would become part of.
+      # Passed through env: rather than interpolated into the script, so a branch name can never
+      # be shell.
+      - name: Resolve which isndev/qb to scaffold with
+        env:
+          INPUT_REF: ${{ inputs.qb_ref }}
+          BASE_REF: ${{ github.base_ref }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          ref="${INPUT_REF}"
+          if [ -z "${ref}" ]; then
+            if [ -n "${BASE_REF}" ]; then ref="${BASE_REF}"; else ref="${REF_NAME}"; fi
+          fi
+          # This template's default branch is `master` while qb's released line is `main`; map it
+          # rather than failing, and say so. Everything else is expected to match by name.
+          if [ "${ref}" = "master" ]; then ref="main"; fi
+          echo "qb ref: ${ref}"
+          if ! git ls-remote --exit-code --heads --tags https://github.com/isndev/qb "${ref}" >/dev/null; then
+            echo "::error::isndev/qb has no branch or tag '${ref}'. qb and this template carry the same branch names; re-run manually with the qb_ref input for a different pairing."
+            exit 1
+          fi
+          echo "QB_REF=${ref}" >> "${GITHUB_ENV}"
+
+      - name: Check out isndev/qb
+        uses: actions/checkout@v6
+        with:
+          repository: isndev/qb
+          ref: ${{ env.QB_REF }}
+          path: qb
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libssl-dev zlib1g-dev
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja openssl@3
+
+      # THE RUN THAT MATTERS: the published scaffolder, against this checkout's content.
+      - name: Scaffold a module with qb's own qb-new-module.sh
+        env:
+          QB_TEMPLATE_DIR: ${{ github.workspace }}/template
+        run: |
+          set -euo pipefail
+          # A real user's git has an identity; the runner image does not, and without one the
+          # scaffolder cannot make its initial commit — which is a thing this lane asserts below.
+          git config --global user.name  'template ci'
+          git config --global user.email 'template-ci@example.invalid'
+
+          work="${RUNNER_TEMP}/scaffolded"
+          rm -rf "${work}"; mkdir -p "${work}"; cd "${work}"
+          QB_REF="${QB_REF}" bash "${GITHUB_WORKSPACE}/qb/script/qb-new-module.sh" demomod
+          echo "SCAFFOLD_DIR=${work}/demomod" >> "${GITHUB_ENV}"
+
+      # The scaffolder's own guarantees, asserted from outside it. Each of these was a shipped
+      # defect at some point: an empty tree reported as success, a tree still called `sample`
+      # after the user asked for something else, and a tree carrying the template's git history.
+      - name: What the scaffolder produced is a personalised, fresh repository
+        run: |
+          set -euo pipefail
+          cd "${SCAFFOLD_DIR}"
+          fail=0
+
+          files="$(git ls-files | wc -l | tr -d '[:space:]')"
+          echo "tracked files: ${files}"
+          [ "${files}" -ge 8 ] || { echo "::error::only ${files} tracked files, floor is 8"; fail=1; }
+
+          commits="$(git rev-list --count HEAD)"
+          echo "commits: ${commits}"
+          [ "${commits}" -eq 1 ] || { echo "::error::${commits} commits; expected exactly 1"; fail=1; }
+          [ -z "$(git remote)" ] || { echo "::error::a remote survived: $(git remote)"; fail=1; }
+
+          # No placeholder may survive rendering, in content or in a path. The path check is not
+          # decoration here: this template's public headers live at src/qbm/@QB_NAME@/, so the
+          # module does not even configure unless the DIRECTORY was renamed.
+          if grep -rIl '@QB_[A-Z_]*@' . --exclude-dir=.git 2>/dev/null | grep -q .; then
+            echo "::error::unresolved placeholders remain:"
+            grep -rIl '@QB_[A-Z_]*@' . --exclude-dir=.git | sed 's/^/  /'
+            fail=1
+          fi
+          if find . -path ./.git -prune -o -name '*@QB_*@*' -print | grep -q .; then
+            echo "::error::unresolved placeholders in path names"; fail=1
+          fi
+
+          # The layout qb_register_module() requires, under the USER's name.
+          [ -f "src/qbm/demomod/demomod.h" ] || {
+            echo "::error::src/qbm/demomod/demomod.h missing — the path was not rendered"; fail=1; }
+          grep -q 'project(qbm-demomod' CMakeLists.txt || {
+            echo "::error::CMakeLists.txt does not name the project qbm-demomod"; fail=1; }
+          if grep -rIln 'qbm::sample\|qbm-sample\|QB_MODULE_SAMPLE' . --exclude-dir=.git | grep -q .; then
+            echo "::error::the old template's sample identifiers leaked into the generated module:"
+            grep -rIln 'qbm::sample\|qbm-sample\|QB_MODULE_SAMPLE' . --exclude-dir=.git | sed 's/^/  /'
+            fail=1
+          fi
+          exit "${fail}"
+
+      # QBM_CI_QB_DIR does two jobs here: it keeps the lane honest about which qb is under test
+      # (the checkout above, not whatever the generated ref resolves to today), and it exercises
+      # the override the generated README tells users to use for source-level work.
+      - name: Configure the generated module against the qb under test
+        run: |
+          set -euo pipefail
+          cd "${SCAFFOLD_DIR}"
+          cmake -S .github/ci/superbuild -B build -G Ninja \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DQBM_CI_QB_DIR="${GITHUB_WORKSPACE}/qb" \
+                2>&1 | tee "${RUNNER_TEMP}/configure.log"
+          # The superbuild root prints what it registered; a configure that silently registered
+          # nothing is the failure mode its own anti-vacuity block exists to catch, and this
+          # asserts the block actually ran rather than trusting a zero exit.
+          grep -q 'superbuild: module qbm-demomod' "${RUNNER_TEMP}/configure.log" || {
+            echo "::error::the superbuild root did not report registering qbm-demomod"; exit 1; }
+
+      - name: Registration floor
+        run: |
+          set -euo pipefail
+          cd "${SCAFFOLD_DIR}"
+          count="$(ctest --test-dir build -N -L 'module:qbm-demomod' | grep -cE '^ *Test +#[0-9]+:' || true)"
+          echo "qbm-demomod registered: ${count} (floor 2)"
+          [ "${count}" -ge 2 ] || { echo "::error::registered ${count} tests, below the floor of 2"; exit 1; }
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          cd "${SCAFFOLD_DIR}"
+          cmake --build build --parallel --target qbm-demomod-tests 2>&1 | tee "${RUNNER_TEMP}/build.log"
+
+      - name: Translation units compiled must be non-zero
+        run: |
+          set -euo pipefail
+          tus="$(grep -c 'Building CXX object' "${RUNNER_TEMP}/build.log" || true)"
+          echo "translation units compiled: ${tus}"
+          [ "${tus}" -gt 0 ] || { echo "::error::0 TUs compiled; every check below would be vacuous"; exit 1; }
+
+      - name: Test — executed, not skipped
+        run: |
+          set -euo pipefail
+          cd "${SCAFFOLD_DIR}"
+          ctest --test-dir build -L 'module:qbm-demomod' --output-on-failure \
+                --output-junit "${RUNNER_TEMP}/results.xml"
+          python3 - "${RUNNER_TEMP}/results.xml" <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          cases = list(ET.parse(sys.argv[1]).getroot().iter('testcase'))
+          skipped = [c.get('name') for c in cases if c.find('skipped') is not None]
+          failed  = [c.get('name') for c in cases if c.find('failure') is not None]
+          executed = len(cases) - len(skipped)
+          print(f"registered={len(cases)} executed={executed} skipped={len(skipped)} failed={len(failed)}")
+          for n in skipped: print(f"  SKIPPED: {n}")
+          bad = False
+          if len(cases) < 2: print(f"::error::{len(cases)} tests registered, floor is 2"); bad = True
+          if executed < 2:   print(f"::error::{executed} tests EXECUTED, floor is 2"); bad = True
+          if skipped:        print("::error::a test self-skipped; ctest reports that as a pass"); bad = True
+          if failed:         print(f"::error::{len(failed)} test(s) failed"); bad = True
+          sys.exit(1 if bad else 0)
+          PY
+
+      # THE STANDALONE PATH, which is the one a user actually types. The step above passes
+      # QBM_CI_QB_DIR; this one passes nothing at all and requires the superbuild root to fetch qb
+      # by itself. It is the difference between "the module builds when CI holds its hand" and
+      # "the module builds on a machine that has never seen qb", and only the second is the claim
+      # this template makes in its README.
+      - name: The advertised no-argument build works on a machine with no qb
+        run: |
+          set -euo pipefail
+          cd "${SCAFFOLD_DIR}"
+          cmake -S .github/ci/superbuild -B build-standalone -G Ninja -DCMAKE_BUILD_TYPE=Release \
+                2>&1 | tee "${RUNNER_TEMP}/standalone.log"
+          grep -q 'fetching qb @' "${RUNNER_TEMP}/standalone.log" || {
+            echo "::error::the superbuild root did not fetch qb; this leg proved nothing"; exit 1; }
+          cmake --build build-standalone --parallel --target qbm-demomod-tests
+          ctest --test-dir build-standalone -L 'module:qbm-demomod' --output-on-failure
