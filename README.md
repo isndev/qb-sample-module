@@ -42,7 +42,7 @@ the scaffolder about it fails loudly rather than shipping a half-rendered tree.
 | `@QB_NAME_LOWER@`   | lowercased                                        | `mymodule`           |
 | `@QB_NAME_UPPER@`   | uppercased — include guards, compile definitions  | `MYMODULE`           |
 | `@QB_REF@`          | the isndev/qb git ref the module builds against   | `develop`            |
-| `@QB_VERSION@`      | the qb version the scaffolder shipped with        | `3.0.0`              |
+| `@QB_VERSION@`      | the qb version the scaffolder shipped with        | `3.1.0`              |
 | `@QB_TEMPLATE_REF@` | the ref of this template that was used            | `develop`            |
 
 A module name is validated as `[a-z][a-z0-9_]*` — stricter than a project's, because it becomes a
@@ -72,7 +72,7 @@ version, and nothing ever built the template. Both are fixed, and both fixes mat
 
 **Version binding.** `qb-new-module.sh` resolves the qb ref from `QB_FRAMEWORK_VERSION` in the qb
 it ships with, and writes it into the generated tree. The one-liner's URL therefore selects the
-pairing — `.../qb/main/script/...` is the released line, `.../qb/v3.0.0/script/...` is that
+pairing — `.../qb/main/script/...` is the released line, `.../qb/v3.1.0/script/...` is that
 release. Nothing is stored in this repository that can go stale. The scaffolder reports which ref
 it used and why, including when it had to fall back.
 
